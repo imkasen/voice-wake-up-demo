@@ -1,3 +1,4 @@
 # Voice Wake-up Demo
 
-1. ~~pocketsphinx~~
+1. ~~PocketSphinx~~
+2. Vosk API
