@@ -150,19 +150,24 @@ def microphone(_model: Model):
     p = PyAudio()
     stream = p.open(format=paInt16, channels=1, rate=16000, input=True, frames_per_buffer=4096)
     stream.start_stream()
+    print("Start...")
 
-    while True:
-        data: bytes = stream.read(4096)
-        if len(data) == 0:
-            break
-        if rec.AcceptWaveform(data):
-            print(f"Result: {json.loads(rec.Result())}")
-        else:
-            res = json.loads(rec.PartialResult())
-            if res["partial"]:
-                print(f"PartialResult: {res['partial']}")
-
-    print(f"FinalResult: {json.loads(rec.FinalResult())}")
+    try:
+        while stream.is_active():
+            data: bytes = stream.read(4096)
+            if rec.AcceptWaveform(data):
+                print(f"Result: {json.loads(rec.Result())}")
+            else:
+                res = json.loads(rec.PartialResult())
+                if res["partial"]:
+                    print(f"PartialResult: {res['partial']}")
+    except KeyboardInterrupt:
+        print("KeyboardInterrupt...")
+    finally:
+        print("End...")
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
 
 
 if __name__ == "__main__":
