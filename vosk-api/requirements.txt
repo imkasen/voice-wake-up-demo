@@ -1,2 +1,4 @@
 vosk
 pyaudio
+noisereduce
+webrtcvad
