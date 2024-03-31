@@ -33,7 +33,6 @@ def noise_reduce(data_bytes: bytes, sr: int) -> bytes:
     """
     data_ndarray = np.frombuffer(buffer=data_bytes, dtype=np.int16)
     reduced_data = nr.reduce_noise(y=data_ndarray, sr=sr)
-    print("Noise reduced...")
     return reduced_data.tobytes()
 
 
@@ -43,10 +42,11 @@ def wake_up(_model: Model, word: str):
     """
     sample_rate = 16000
     vad_duration_ms = 30
-    frames_num = int(sample_rate * vad_duration_ms / 1000)
+    frame_duration_sec: float = vad_duration_ms / 1000
+    frame_size = int(sample_rate * frame_duration_sec)
 
-    # vad = webrtcvad.Vad()
-    # vad.set_mode(1)  # [0, 3]
+    vad = webrtcvad.Vad()
+    vad.set_mode(1)  # [0, 3]
 
     rec = KaldiRecognizer(_model, sample_rate)
 
@@ -56,28 +56,23 @@ def wake_up(_model: Model, word: str):
         channels=1,
         rate=sample_rate,
         input=True,
-        frames_per_buffer=frames_num,
+        frames_per_buffer=frame_size,
     )
     stream.start_stream()
     print("Start...")
 
     try:
         while stream.is_active():
-            data: bytes = stream.read(frames_num, exception_on_overflow=False)
-
-            # if vad.is_speech(data, sample_rate):  # VAD
-            #     print("Voice detected...")
-
-            data = noise_reduce(data, sample_rate)
-
-            if rec.AcceptWaveform(data):
-                res_text = json.loads(rec.Result())["text"]
+            data: bytes = stream.read(frame_size, exception_on_overflow=False)
+            if vad.is_speech(data, sample_rate):
+                # data = noise_reduce(data, sample_rate)  # slow
+                if rec.AcceptWaveform(data):
+                    res_text: str = json.loads(rec.Result())["text"]
+                else:
+                    res_text: str = json.loads(rec.PartialResult())["partial"]
                 if res_text:
                     print(res_text)
-            else:
-                res_text: str = json.loads(rec.PartialResult())["partial"]
-                if res_text:
-                    print(res_text)
+                    rec.Reset()
                     if words_compare(res_text, word):
                         print(f"Detect '{res_text}'!")
                         break
@@ -95,23 +90,24 @@ def wake_up_callback(_model: Model, word: str):
     voice wake up based on the audio input from microphone, using pyaudio callback
     """
     sample_rate = 16000
-    frames_num = 4096
+    vad_duration_ms = 30
+    frame_duration_sec: float = vad_duration_ms / 1000
+    frame_size = int(sample_rate * frame_duration_sec)
 
     rec = KaldiRecognizer(_model, sample_rate)
 
+    vad = webrtcvad.Vad()
+    vad.set_mode(1)  # [0, 3]
+
     def callback(in_data, frame_count, time_info, status):  # pylint: disable=W0613
-        # TODO
-
-        data: bytes = noise_reduce(in_data, sample_rate)
-
-        if rec.AcceptWaveform(data):
-            res_text = json.loads(rec.Result())["text"]
+        if vad.is_speech(in_data, sample_rate):
+            if rec.AcceptWaveform(in_data):
+                res_text = json.loads(rec.Result())["text"]
+            else:
+                res_text = json.loads(rec.PartialResult())["partial"]
             if res_text:
                 print(res_text)
-        else:
-            res_text = json.loads(rec.PartialResult())["partial"]
-            if res_text:
-                print(res_text)
+                rec.Reset()
                 if words_compare(res_text, word):
                     print(f"Detect '{res_text}'!")
                     return (None, pyaudio.paComplete)
@@ -123,7 +119,7 @@ def wake_up_callback(_model: Model, word: str):
         channels=1,
         rate=sample_rate,
         input=True,
-        frames_per_buffer=frames_num,
+        frames_per_buffer=frame_size,
         stream_callback=callback,
     )
 
