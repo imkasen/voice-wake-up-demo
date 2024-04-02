@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import threading
+import time
 
 import noisereduce as nr
 import numpy as np
@@ -52,11 +53,12 @@ class VoiceDetector:
         reduced_data = nr.reduce_noise(y=data_ndarray, sr=sr)
         return reduced_data.tobytes()
 
-    def audio_capture(self, p: pyaudio.PyAudio):
+    def audio_capture(self):
         """
         capture audio data from pyaudio
         """
         try:
+            p = pyaudio.PyAudio()
             stream = p.open(
                 format=pyaudio.paInt16,
                 channels=1,
@@ -68,34 +70,36 @@ class VoiceDetector:
             print("Start audio capture from microphone...")
 
             while (not self.stop_event.is_set()) and stream.is_active():
-                # print("read data from pyaudio stream.")
+                print("read data from pyaudio stream.")
 
                 frame: bytes = stream.read(self.frame_size)
                 self.audio_queue.put(frame)
 
-        except Exception as e:
-            print(f"An error occurred during audio capture: {e}")
+        except OSError as e:
+            print(f"An I/O error occurred during audio capture: {e}")
         finally:
             print("End audio capture...")
             stream.stop_stream()
             stream.close()
+            p.terminate()
             self.stop_event.set()
 
-    def audio_processing(self):
+    def audio_process(self):
         """
         process audio using webrtcvad, vosk
         """
         try:
             rec = KaldiRecognizer(self.model, self.sample_rate)
-            # empty_queue_printed = False
+            empty_queue_printed = False
 
             while not self.stop_event.is_set():
                 if not self.audio_queue.empty():
-                    # print("get data from audio queue.")
-                    # empty_queue_printed = False
+                    print("get data from audio queue.")
+                    empty_queue_printed = False
 
                     frame: bytes = self.audio_queue.get()
                     if self.vad.is_speech(frame, self.sample_rate):
+                        # data = noise_reduce(data, sample_rate)  # slow
                         if rec.AcceptWaveform(frame):
                             res_text: str = json.loads(rec.Result())["text"]
                         else:
@@ -107,14 +111,17 @@ class VoiceDetector:
                                 print(f"Detect '{res_text}'!")
                                 self.stop_event.set()
                                 break
-                # else:
-                #     if not empty_queue_printed:
-                #         print("audio queue is empty, wait...")
-                #         empty_queue_printed = True
+                else:
+                    if not empty_queue_printed:
+                        print("audio queue is empty, wait...")
+                        empty_queue_printed = True
 
-        except Exception as e:
-            print(f"An error occurred during voice processing: {e}")
+        except OSError as e:
+            print(f"An I/O error occurred during voice processing: {e}")
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error during voice processing: {e}")
         finally:
+            print("End audio processing...")
             self.stop_event.set()
 
     def start(self):
@@ -122,22 +129,17 @@ class VoiceDetector:
         start
         """
         try:
-            p = pyaudio.PyAudio()
-
-            capture_thread = threading.Thread(target=self.audio_capture, args=(p,))
-            process_thread = threading.Thread(target=self.audio_processing)
+            capture_thread = threading.Thread(target=self.audio_capture)
+            process_thread = threading.Thread(target=self.audio_process)
 
             capture_thread.start()
             process_thread.start()
 
-            capture_thread.join()
-            process_thread.join()
-
-        except KeyboardInterrupt:  # TODO: fail to catch KeyboardInterrupt
-            print("Terminating: KeyboardInterrupt")
+            return capture_thread, process_thread
+        except RuntimeError as e:
+            print(f"An error occurred during thread initialization: {e}")
             self.stop_event.set()
-        finally:
-            p.terminate()
+            return None, None
 
 
 if __name__ == "__main__":
@@ -154,4 +156,16 @@ if __name__ == "__main__":
     CN_WORD = "小白"
 
     vd = VoiceDetector(model, CN_WORD)
-    vd.start()
+    ct, pt = vd.start()
+
+    try:
+        while True:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        print("Terminating: KeyboardInterrupt")
+        vd.stop_event.set()
+        if ct is not None:
+            ct.join()
+        if pt is not None:
+            pt.join()
+        print("Threads successfully terminated.")
